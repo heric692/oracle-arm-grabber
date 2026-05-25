@@ -1,6 +1,6 @@
 name: Oracle ARM 自動搶機器
 
-"on":
+on:
   schedule:
     - cron: '*/15 * * * *'   # 每 15 分鐘自動執行
   workflow_dispatch:           # 也可以手動觸發
