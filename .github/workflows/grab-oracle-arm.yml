@@ -1,30 +1,26 @@
 name: Oracle ARM 自動搶機器
-
 on:
   schedule:
-    - cron: '*/15 * * * *'   # 每 15 分鐘自動執行
-  workflow_dispatch:           # 也可以手動觸發
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
 
 jobs:
   grab:
     runs-on: ubuntu-latest
-
     steps:
       - name: 安裝 OCI CLI
         run: pip install oci-cli --quiet
 
       - name: 設定 OCI 憑證
+        env:
+          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
         run: |
           mkdir -p ~/.oci
-          cat > ~/.oci/config << EOF
-          [DEFAULT]
-          user=${{ secrets.OCI_USER_OCID }}
-          fingerprint=${{ secrets.OCI_FINGERPRINT }}
-          tenancy=${{ secrets.OCI_TENANCY_OCID }}
-          region=us-ashburn-1
-          key_file=/home/runner/.oci/key.pem
-          EOF
-          echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/key.pem
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=us-ashburn-1\nkey_file=/home/runner/.oci/key.pem\n' \
+            "${{ secrets.OCI_USER_OCID }}" \
+            "${{ secrets.OCI_FINGERPRINT }}" \
+            "${{ secrets.OCI_TENANCY_OCID }}" > ~/.oci/config
+          echo "$OCI_PRIVATE_KEY" > ~/.oci/key.pem
           chmod 600 ~/.oci/key.pem
 
       - name: 查詢 Ubuntu 22.04 ARM 映像 OCID
@@ -39,11 +35,11 @@ jobs:
             --query "sort_by(data, &\"time-created\")[-1].id" \
             --raw-output)
           echo "image_id=$IMAGE" >> $GITHUB_OUTPUT
-          echo "找到映像：$IMAGE"
 
       - name: 嘗試三個 AD 搶執行個體
         id: create
         run: |
+          echo "${{ secrets.SSH_PUBLIC_KEY }}" > /tmp/ssh_key.pub
           SUCCESS=false
           for AD in "OfZq:US-ASHBURN-AD-1" "OfZq:US-ASHBURN-AD-2" "OfZq:US-ASHBURN-AD-3"; do
             echo "正在嘗試 $AD ..."
@@ -56,25 +52,16 @@ jobs:
               --subnet-id "${{ secrets.OCI_SUBNET_OCID }}" \
               --assign-public-ip true \
               --display-name "n8n-server" \
-              --ssh-authorized-keys-file <(echo "${{ secrets.SSH_PUBLIC_KEY }}") \
+              --ssh-authorized-keys-file /tmp/ssh_key.pub \
               2>&1) || true
-
             if echo "$RESULT" | grep -q '"lifecycle-state"'; then
-              echo "🎉 成功！在 $AD 搶到執行個體！"
+              echo "成功！在 $AD 搶到執行個體！"
               SUCCESS=true
               break
-            else
-              echo "$AD 容量不足，繼續嘗試..."
             fi
           done
-
           echo "success=$SUCCESS" >> $GITHUB_OUTPUT
-          if [ "$SUCCESS" = "false" ]; then
-            echo "三個 AD 都滿了，15 分鐘後再試。"
-          fi
 
-      - name: 搶到時發 GitHub 通知
+      - name: 搶到時發通知
         if: steps.create.outputs.success == 'true'
-        run: |
-          echo "::notice::🎉 Oracle ARM 執行個體搶到了！請立刻登入 Oracle Console 確認！"
-          exit 0
+        run: echo "::notice::Oracle ARM 執行個體搶到了！請立刻登入 Oracle Console 確認！"
